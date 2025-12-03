@@ -4,6 +4,14 @@ import { onDestroy } from "./_";
 // Configurable corner radius for rounded path corners
 const CORNER_RADIUS = 8;
 
+// Configurable inner shadow distance (how far the shadow extends inward)
+const INNER_SHADOW_DISTANCE = 18;
+const STROKE_WIDTH = 0;
+const BASE_STROKE_COLOR = "rgba(0, 94, 255, 1)";
+const INNER_SHADOW_RGB = "0, 94, 255";
+const INNER_SHADOW_STEPS = 24;
+const INNER_SHADOW_MAX_OPACITY = 0.15;
+
 interface Rect {
   x: number;
   y: number;
@@ -350,6 +358,111 @@ function drawIntersectionPoints(
   });
 }
 
+function offsetPointInward(
+  point: Point,
+  prev: Point,
+  next: Point,
+  distance: number
+): Point {
+  // Calculate edge direction vectors (from prev to point, and from point to next)
+  const dx1 = point.x - prev.x;
+  const dy1 = point.y - prev.y;
+  const dx2 = next.x - point.x;
+  const dy2 = next.y - point.y;
+
+  // Normalize direction vectors
+  const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+  const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+  if (len1 === 0 || len2 === 0) return point;
+
+  // Calculate perpendicular vectors (inward normals for counterclockwise path)
+  // Rotate 90 degrees counterclockwise: (dx, dy) -> (-dy, dx) for inward
+  const perp1x = -dy1 / len1;
+  const perp1y = dx1 / len1;
+  const perp2x = -dy2 / len2;
+  const perp2y = dx2 / len2;
+
+  // Average the two perpendicular vectors (bisector)
+  const avgNx = (perp1x + perp2x) / 2;
+  const avgNy = (perp1y + perp2y) / 2;
+  const avgLen = Math.sqrt(avgNx * avgNx + avgNy * avgNy);
+
+  if (avgLen === 0) return point;
+
+  // Normalize average normal
+  const normNx = avgNx / avgLen;
+  const normNy = avgNy / avgLen;
+
+  // Offset point inward (negative distance means inward for counterclockwise paths)
+  return {
+    x: point.x + normNx * distance,
+    y: point.y + normNy * distance,
+  };
+}
+
+function offsetPathInward(outline: Point[], distance: number): Point[] {
+  if (outline.length < 2) return outline;
+
+  return outline.map((point, i) => {
+    const prev = outline[(i - 1 + outline.length) % outline.length];
+    const next = outline[(i + 1) % outline.length];
+    return offsetPointInward(point, prev, next, distance);
+  });
+}
+
+function createRoundedPath(
+  context: CanvasRenderingContext2D,
+  outline: Point[]
+) {
+  const firstPoint = outline[0];
+  const lastPoint = outline[outline.length - 1];
+  const secondPoint = outline[1];
+
+  // Start from the last point so we can properly round the first corner
+  context.moveTo(lastPoint.x, lastPoint.y);
+
+  // Explicitly round the first corner (at firstPoint)
+  context.arcTo(
+    firstPoint.x,
+    firstPoint.y,
+    secondPoint.x,
+    secondPoint.y,
+    CORNER_RADIUS
+  );
+
+  // Draw path with rounded corners for the remaining corners
+  for (let i = 1; i < outline.length; i++) {
+    const current = outline[i];
+    const next = outline[(i + 1) % outline.length];
+    const afterNext = outline[(i + 2) % outline.length];
+
+    context.arcTo(current.x, current.y, next.x, next.y, CORNER_RADIUS);
+  }
+
+  context.closePath();
+}
+
+function drawInnerShadow(context: CanvasRenderingContext2D, outline: Point[]) {
+  if (outline.length < 2 || INNER_SHADOW_STEPS <= 0) return;
+
+  const maxStepIndex = INNER_SHADOW_STEPS - 1;
+
+  for (let step = 0; step < INNER_SHADOW_STEPS; step++) {
+    const t = maxStepIndex === 0 ? 0 : step / maxStepIndex;
+    // Ease towards the center so the gradient stays tight near the stroke
+    const eased = 1 - Math.pow(1 - t, 2);
+    const additionalDistance = eased * INNER_SHADOW_DISTANCE;
+    const opacity = (1 - t) * INNER_SHADOW_MAX_OPACITY;
+
+    context.beginPath();
+    createRoundedPath(context, outline);
+    context.lineWidth = STROKE_WIDTH + additionalDistance * 2;
+    context.strokeStyle = `rgba(${INNER_SHADOW_RGB}, ${opacity})`;
+    context.stroke();
+  }
+}
+
 function drawUnionOutlines(
   context: CanvasRenderingContext2D,
   outlines: Point[][]
@@ -357,43 +470,24 @@ function drawUnionOutlines(
   outlines.forEach((outline) => {
     if (outline.length < 2) return;
 
+    // Draw crisp outer stroke first
     context.beginPath();
-
-    const firstPoint = outline[0];
-    const lastPoint = outline[outline.length - 1];
-    const secondPoint = outline[1];
-
-    // Start from the last point so we can properly round the first corner
-    // arcTo needs a line segment before it, so starting from lastPoint gives us that
-    context.moveTo(lastPoint.x, lastPoint.y);
-
-    // Explicitly round the first corner (at firstPoint)
-    // arcTo(lastPoint, firstPoint, secondPoint) rounds the corner at firstPoint
-    context.arcTo(
-      firstPoint.x,
-      firstPoint.y,
-      secondPoint.x,
-      secondPoint.y,
-      CORNER_RADIUS
-    );
-
-    // Draw path with rounded corners for the remaining corners
-    // arcTo(x1, y1, x2, y2, radius) draws a line towards (x1,y1) then arcs towards (x2,y2)
-    // The corner is rounded at the point where line towards (x1,y1) meets line towards (x2,y2)
-    for (let i = 1; i < outline.length; i++) {
-      const current = outline[i];
-      const next = outline[(i + 1) % outline.length];
-      const afterNext = outline[(i + 2) % outline.length];
-
-      // arcTo(current, next, afterNext) rounds the corner at 'next'
-      context.arcTo(current.x, current.y, next.x, next.y, CORNER_RADIUS);
-    }
-
-    // Close the path (the closing corner is already rounded in the loop above)
-    context.closePath();
-    context.strokeStyle = "blue";
-    context.lineWidth = 3;
+    createRoundedPath(context, outline);
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    context.strokeStyle = BASE_STROKE_COLOR;
+    context.lineWidth = STROKE_WIDTH;
     context.stroke();
+
+    // Layer multiple clipped strokes to mimic a CSS inset shadow that follows the path
+    context.save();
+    context.beginPath();
+    createRoundedPath(context, outline);
+    context.clip();
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    drawInnerShadow(context, outline);
+    context.restore();
   });
 }
 
@@ -454,7 +548,7 @@ export default function TextAccent(element: HTMLElement) {
   const spans = Array.from(element.querySelectorAll<HTMLSpanElement>("span"));
 
   spans.forEach((span) => {
-    span.style.backgroundColor = "rgba(0, 0, 255, 0.1)";
+    // span.style.backgroundColor = "rgba(0, 0, 255, 0.1)";
   });
 
   const canvas =
