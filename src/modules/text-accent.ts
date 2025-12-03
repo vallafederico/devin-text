@@ -1,6 +1,9 @@
 import { Resize } from "@/lib/subs";
 import { onDestroy } from "./_";
 
+// Configurable corner radius for rounded path corners
+const CORNER_RADIUS = 8;
+
 interface Rect {
   x: number;
   y: number;
@@ -353,13 +356,40 @@ function drawUnionOutlines(
 ) {
   outlines.forEach((outline) => {
     if (outline.length < 2) return;
-    context.beginPath();
-    context.moveTo(outline[0].x, outline[0].y);
 
+    context.beginPath();
+
+    const firstPoint = outline[0];
+    const lastPoint = outline[outline.length - 1];
+    const secondPoint = outline[1];
+
+    // Start from the last point so we can properly round the first corner
+    // arcTo needs a line segment before it, so starting from lastPoint gives us that
+    context.moveTo(lastPoint.x, lastPoint.y);
+
+    // Explicitly round the first corner (at firstPoint)
+    // arcTo(lastPoint, firstPoint, secondPoint) rounds the corner at firstPoint
+    context.arcTo(
+      firstPoint.x,
+      firstPoint.y,
+      secondPoint.x,
+      secondPoint.y,
+      CORNER_RADIUS
+    );
+
+    // Draw path with rounded corners for the remaining corners
+    // arcTo(x1, y1, x2, y2, radius) draws a line towards (x1,y1) then arcs towards (x2,y2)
+    // The corner is rounded at the point where line towards (x1,y1) meets line towards (x2,y2)
     for (let i = 1; i < outline.length; i++) {
-      context.lineTo(outline[i].x, outline[i].y);
+      const current = outline[i];
+      const next = outline[(i + 1) % outline.length];
+      const afterNext = outline[(i + 2) % outline.length];
+
+      // arcTo(current, next, afterNext) rounds the corner at 'next'
+      context.arcTo(current.x, current.y, next.x, next.y, CORNER_RADIUS);
     }
 
+    // Close the path (the closing corner is already rounded in the loop above)
     context.closePath();
     context.strokeStyle = "blue";
     context.lineWidth = 3;
